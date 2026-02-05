@@ -463,14 +463,33 @@ fn process_trigger_words(text: &str, trigger_words: &[TriggerWord]) -> Vec<Outpu
     let mut remaining = text.to_string();
 
     while !remaining.is_empty() {
-        let mut found_match = false;
         let remaining_lower = remaining.to_lowercase();
+
+        // Find the trigger with the earliest position in the text
+        let mut earliest_match: Option<(usize, &TriggerWord)> = None;
 
         for trigger in &triggers {
             let phrase_lower = trigger.trigger_phrase.to_lowercase();
 
-            // Find the trigger phrase with word boundary check
             if let Some(pos) = find_word_boundary_match(&remaining_lower, &phrase_lower) {
+                match &earliest_match {
+                    None => earliest_match = Some((pos, trigger)),
+                    Some((earliest_pos, earliest_trigger)) => {
+                        // Prefer earlier position, or longer phrase at same position
+                        if pos < *earliest_pos
+                            || (pos == *earliest_pos
+                                && trigger.trigger_phrase.len()
+                                    > earliest_trigger.trigger_phrase.len())
+                        {
+                            earliest_match = Some((pos, trigger));
+                        }
+                    }
+                }
+            }
+        }
+
+        match earliest_match {
+            Some((pos, trigger)) => {
                 // Add text before the trigger as a text segment
                 if pos > 0 {
                     let before = &remaining[..pos];
@@ -507,16 +526,12 @@ fn process_trigger_words(text: &str, trigger_words: &[TriggerWord]) -> Vec<Outpu
                 } else {
                     String::new()
                 };
-
-                found_match = true;
+            }
+            None => {
+                // No trigger found - add remaining text and break
+                segments.push(OutputSegment::Text(remaining));
                 break;
             }
-        }
-
-        if !found_match {
-            // No trigger found - add remaining text and break
-            segments.push(OutputSegment::Text(remaining));
-            break;
         }
     }
 
@@ -778,4 +793,181 @@ fn paste_segment(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_trigger(phrase: &str, action_type: TriggerActionType, action_value: &str) -> TriggerWord {
+        TriggerWord {
+            id: format!("test_{}", phrase),
+            trigger_phrase: phrase.to_string(),
+            action_type,
+            action_value: action_value.to_string(),
+            enabled: true,
+            is_builtin: false,
+        }
+    }
+
+    #[test]
+    fn test_find_word_boundary_match_basic() {
+        assert_eq!(find_word_boundary_match("hello enter world", "enter"), Some(6));
+        assert_eq!(find_word_boundary_match("enter world", "enter"), Some(0));
+        assert_eq!(find_word_boundary_match("hello enter", "enter"), Some(6));
+    }
+
+    #[test]
+    fn test_find_word_boundary_match_no_partial() {
+        // Should NOT match partial words
+        assert_eq!(find_word_boundary_match("entering the room", "enter"), None);
+        assert_eq!(find_word_boundary_match("center of attention", "enter"), None);
+        assert_eq!(find_word_boundary_match("reenter the building", "enter"), None);
+    }
+
+    #[test]
+    fn test_find_word_boundary_match_with_punctuation() {
+        assert_eq!(find_word_boundary_match("hello enter, world", "enter"), Some(6));
+        assert_eq!(find_word_boundary_match("hello enter. world", "enter"), Some(6));
+        assert_eq!(find_word_boundary_match("enter!", "enter"), Some(0));
+    }
+
+    #[test]
+    fn test_process_trigger_words_single_keypress() {
+        let triggers = vec![
+            make_trigger("enter", TriggerActionType::KeyPress, "enter"),
+        ];
+
+        let segments = process_trigger_words("hello enter world", &triggers);
+        assert_eq!(segments.len(), 3);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "hello"),
+            _ => panic!("Expected text segment"),
+        }
+        match &segments[1] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment"),
+        }
+        match &segments[2] {
+            OutputSegment::Text(t) => assert_eq!(t, "world"),
+            _ => panic!("Expected text segment"),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_text_replacement() {
+        let triggers = vec![
+            make_trigger("period", TriggerActionType::TextReplacement, "."),
+        ];
+
+        let segments = process_trigger_words("hello period", &triggers);
+        assert_eq!(segments.len(), 1);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "hello ."),
+            _ => panic!("Expected merged text segment"),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_punctuation_after_keypress() {
+        let triggers = vec![
+            make_trigger("enter", TriggerActionType::KeyPress, "enter"),
+        ];
+
+        // Punctuation after keypress trigger should be ignored
+        let segments = process_trigger_words("hello enter. world", &triggers);
+        assert_eq!(segments.len(), 3);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "hello"),
+            _ => panic!("Expected text segment"),
+        }
+        match &segments[1] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment"),
+        }
+        match &segments[2] {
+            OutputSegment::Text(t) => assert_eq!(t, "world"),
+            _ => panic!("Expected text segment"),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_at_end() {
+        let triggers = vec![
+            make_trigger("enter", TriggerActionType::KeyPress, "enter"),
+        ];
+
+        let segments = process_trigger_words("submit enter", &triggers);
+        assert_eq!(segments.len(), 2);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "submit"),
+            _ => panic!("Expected text segment"),
+        }
+        match &segments[1] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment"),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_disabled_trigger() {
+        let mut trigger = make_trigger("enter", TriggerActionType::KeyPress, "enter");
+        trigger.enabled = false;
+        let triggers = vec![trigger];
+
+        let segments = process_trigger_words("hello enter world", &triggers);
+        assert_eq!(segments.len(), 1);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "hello enter world"),
+            _ => panic!("Expected text segment"),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_case_insensitive() {
+        let triggers = vec![
+            make_trigger("enter", TriggerActionType::KeyPress, "enter"),
+        ];
+
+        let segments = process_trigger_words("hello ENTER world", &triggers);
+        assert_eq!(segments.len(), 3);
+
+        match &segments[1] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment"),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_multiple_triggers() {
+        let triggers = vec![
+            make_trigger("enter", TriggerActionType::KeyPress, "enter"),
+            make_trigger("tab", TriggerActionType::KeyPress, "tab"),
+        ];
+
+        let segments = process_trigger_words("name tab email enter", &triggers);
+        assert_eq!(segments.len(), 4);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "name"),
+            _ => panic!("Expected text segment"),
+        }
+        match &segments[1] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "tab"),
+            _ => panic!("Expected keypress segment"),
+        }
+        match &segments[2] {
+            OutputSegment::Text(t) => assert_eq!(t, "email"),
+            _ => panic!("Expected text segment"),
+        }
+        match &segments[3] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment"),
+        }
+    }
 }
