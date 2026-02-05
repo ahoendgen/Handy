@@ -4,6 +4,7 @@ import { ShowOverlay } from "../ShowOverlay";
 import { TranslateToEnglish } from "../TranslateToEnglish";
 import { ModelUnloadTimeoutSetting } from "../ModelUnloadTimeout";
 import { CustomWords } from "../CustomWords";
+import { TriggerWords } from "../TriggerWords";
 import { SettingsGroup } from "../../ui/SettingsGroup";
 import { StartHidden } from "../StartHidden";
 import { AutostartToggle } from "../AutostartToggle";
@@ -47,6 +48,7 @@ export const AdvancedSettings: React.FC = () => {
           <TranslateToEnglish descriptionMode="tooltip" grouped={true} />
         )}
         <CustomWords descriptionMode="tooltip" grouped />
+        <TriggerWords descriptionMode="tooltip" grouped />
         <AppendTrailingSpace descriptionMode="tooltip" grouped={true} />
       </SettingsGroup>
 

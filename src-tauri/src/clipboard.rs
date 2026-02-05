@@ -1,6 +1,6 @@
 use crate::input::{self, EnigoState};
-use crate::settings::{get_settings, ClipboardHandling, PasteMethod};
-use enigo::Enigo;
+use crate::settings::{get_settings, ClipboardHandling, PasteMethod, TriggerActionType, TriggerWord};
+use enigo::{Enigo, Key, Keyboard};
 use log::info;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
@@ -433,6 +433,245 @@ fn send_key_combo_via_xdotool(paste_method: &PasteMethod) -> Result<(), String> 
     Ok(())
 }
 
+// ============================================================================
+// Trigger Word Processing
+// ============================================================================
+
+/// Represents a segment of output - either text to type or a key to press
+#[derive(Debug, Clone)]
+enum OutputSegment {
+    Text(String),
+    KeyPress(String),
+}
+
+/// Process text through trigger word replacement.
+/// Returns segments to be output (text and key presses interleaved).
+fn process_trigger_words(text: &str, trigger_words: &[TriggerWord]) -> Vec<OutputSegment> {
+    // Build a list of enabled triggers, sorted by phrase length (longest first)
+    // to ensure longer phrases match before shorter ones
+    let mut triggers: Vec<_> = trigger_words
+        .iter()
+        .filter(|t| t.enabled)
+        .collect();
+    triggers.sort_by(|a, b| b.trigger_phrase.len().cmp(&a.trigger_phrase.len()));
+
+    if triggers.is_empty() {
+        return vec![OutputSegment::Text(text.to_string())];
+    }
+
+    let mut segments = Vec::new();
+    let mut remaining = text.to_string();
+
+    while !remaining.is_empty() {
+        let mut found_match = false;
+        let remaining_lower = remaining.to_lowercase();
+
+        for trigger in &triggers {
+            let phrase_lower = trigger.trigger_phrase.to_lowercase();
+
+            // Find the trigger phrase with word boundary check
+            if let Some(pos) = find_word_boundary_match(&remaining_lower, &phrase_lower) {
+                // Add text before the trigger as a text segment
+                if pos > 0 {
+                    let before = &remaining[..pos];
+                    // Trim trailing space before a trigger
+                    let before_trimmed = before.trim_end();
+                    if !before_trimmed.is_empty() {
+                        segments.push(OutputSegment::Text(before_trimmed.to_string()));
+                    }
+                }
+
+                // Add the trigger action
+                match trigger.action_type {
+                    TriggerActionType::TextReplacement => {
+                        segments.push(OutputSegment::Text(trigger.action_value.clone()));
+                    }
+                    TriggerActionType::KeyPress => {
+                        segments.push(OutputSegment::KeyPress(trigger.action_value.clone()));
+                    }
+                }
+
+                // Continue with the text after the trigger
+                let end_pos = pos + trigger.trigger_phrase.len();
+                remaining = if end_pos < remaining.len() {
+                    let after = &remaining[end_pos..];
+                    // Skip trailing punctuation directly after a KeyPress trigger
+                    // (e.g., "enter." -> the "." is added by speech recognition)
+                    let after = if trigger.action_type == TriggerActionType::KeyPress {
+                        after.trim_start_matches(|c: char| c.is_ascii_punctuation() && c != '\'')
+                    } else {
+                        after
+                    };
+                    // Skip any leading space after the trigger
+                    after.trim_start().to_string()
+                } else {
+                    String::new()
+                };
+
+                found_match = true;
+                break;
+            }
+        }
+
+        if !found_match {
+            // No trigger found - add remaining text and break
+            segments.push(OutputSegment::Text(remaining));
+            break;
+        }
+    }
+
+    // Merge consecutive text segments
+    merge_text_segments(segments)
+}
+
+/// Find a trigger phrase at a word boundary in the text.
+/// Returns the position if found, None otherwise.
+fn find_word_boundary_match(text: &str, phrase: &str) -> Option<usize> {
+    let mut search_start = 0;
+
+    while let Some(relative_pos) = text[search_start..].find(phrase) {
+        let pos = search_start + relative_pos;
+        let end_pos = pos + phrase.len();
+
+        // Check if it's at a word boundary
+        let at_start = pos == 0 || !text[..pos].chars().last().unwrap_or(' ').is_alphanumeric();
+        let at_end = end_pos >= text.len()
+            || !text[end_pos..].chars().next().unwrap_or(' ').is_alphanumeric();
+
+        if at_start && at_end {
+            return Some(pos);
+        }
+
+        // Continue searching after this position
+        search_start = pos + 1;
+        if search_start >= text.len() {
+            break;
+        }
+    }
+
+    None
+}
+
+/// Merge consecutive text segments into single segments.
+fn merge_text_segments(segments: Vec<OutputSegment>) -> Vec<OutputSegment> {
+    let mut merged = Vec::new();
+    let mut current_text = String::new();
+
+    for segment in segments {
+        match segment {
+            OutputSegment::Text(t) => {
+                if !current_text.is_empty() {
+                    current_text.push(' ');
+                }
+                current_text.push_str(&t);
+            }
+            OutputSegment::KeyPress(k) => {
+                if !current_text.is_empty() {
+                    merged.push(OutputSegment::Text(current_text));
+                    current_text = String::new();
+                }
+                merged.push(OutputSegment::KeyPress(k));
+            }
+        }
+    }
+
+    if !current_text.is_empty() {
+        merged.push(OutputSegment::Text(current_text));
+    }
+
+    merged
+}
+
+/// Send a key press using enigo.
+fn send_key_press(enigo: &mut Enigo, key_name: &str) -> Result<(), String> {
+    let key = match key_name.to_lowercase().as_str() {
+        "enter" | "return" => Key::Return,
+        "tab" => Key::Tab,
+        "backspace" => Key::Backspace,
+        "escape" | "esc" => Key::Escape,
+        "space" => Key::Space,
+        "delete" | "del" => Key::Delete,
+        "up" | "uparrow" => Key::UpArrow,
+        "down" | "downarrow" => Key::DownArrow,
+        "left" | "leftarrow" => Key::LeftArrow,
+        "right" | "rightarrow" => Key::RightArrow,
+        "home" => Key::Home,
+        "end" => Key::End,
+        "pageup" => Key::PageUp,
+        "pagedown" => Key::PageDown,
+        _ => return Err(format!("Unknown key: {}", key_name)),
+    };
+
+    // Use Press + Release instead of Click for better compatibility
+    enigo
+        .key(key, enigo::Direction::Press)
+        .map_err(|e| format!("Failed to press key '{}': {}", key_name, e))?;
+
+    std::thread::sleep(Duration::from_millis(10));
+
+    enigo
+        .key(key, enigo::Direction::Release)
+        .map_err(|e| format!("Failed to release key '{}': {}", key_name, e))
+}
+
+/// Send a key press using Linux native tools (for Wayland/X11 compatibility).
+#[cfg(target_os = "linux")]
+fn send_key_press_linux(key_name: &str) -> Result<bool, String> {
+    use crate::utils::{is_kde_wayland, is_wayland};
+
+    let key_arg = match key_name.to_lowercase().as_str() {
+        "enter" | "return" => "Return",
+        "tab" => "Tab",
+        "backspace" => "BackSpace",
+        "escape" | "esc" => "Escape",
+        "space" => "space",
+        "delete" | "del" => "Delete",
+        _ => return Ok(false), // Let enigo handle other keys
+    };
+
+    if is_wayland() {
+        // On Wayland, use wtype (unless KDE), dotool, or ydotool
+        if !is_kde_wayland() && is_wtype_available() {
+            let output = std::process::Command::new("wtype")
+                .arg("-k")
+                .arg(key_arg)
+                .output()
+                .map_err(|e| format!("Failed to execute wtype: {}", e))?;
+
+            if output.status.success() {
+                return Ok(true);
+            }
+        }
+
+        if is_dotool_available() {
+            let command = format!("echo key {} | dotool", key_arg.to_lowercase());
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&command)
+                .output()
+                .map_err(|e| format!("Failed to execute dotool: {}", e))?;
+
+            if output.status.success() {
+                return Ok(true);
+            }
+        }
+    } else if is_xdotool_available() {
+        // On X11, use xdotool
+        let output = std::process::Command::new("xdotool")
+            .arg("key")
+            .arg("--clearmodifiers")
+            .arg(key_arg)
+            .output()
+            .map_err(|e| format!("Failed to execute xdotool: {}", e))?;
+
+        if output.status.success() {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 /// Types text directly by simulating individual key presses.
 fn paste_direct(enigo: &mut Enigo, text: &str) -> Result<(), String> {
     #[cfg(target_os = "linux")]
@@ -472,23 +711,40 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
         .lock()
         .map_err(|e| format!("Failed to lock Enigo: {}", e))?;
 
-    // Perform the paste operation
-    match paste_method {
-        PasteMethod::None => {
-            info!("PasteMethod::None selected - skipping paste action");
+    // Process trigger words if enabled
+    if settings.trigger_words_enabled && !settings.trigger_words.is_empty() {
+        let segments = process_trigger_words(&text, &settings.trigger_words);
+        info!("Trigger words enabled, processing {} segments", segments.len());
+
+        for segment in &segments {
+            match segment {
+                OutputSegment::Text(t) if !t.is_empty() => {
+                    info!("Pasting text segment: '{}'", t);
+                    paste_segment(&mut enigo, t, &app_handle, &paste_method, paste_delay_ms)?;
+                    // Wait for paste to complete before processing next segment
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                OutputSegment::KeyPress(key) => {
+                    info!("Sending key press: '{}'", key);
+                    // Try Linux native tools first, fall back to enigo
+                    #[cfg(target_os = "linux")]
+                    {
+                        if !send_key_press_linux(key)? {
+                            send_key_press(&mut enigo, key)?;
+                        }
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    send_key_press(&mut enigo, key)?;
+
+                    // Delay after key press to let the application process it
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                _ => {}
+            }
         }
-        PasteMethod::Direct => {
-            paste_direct(&mut enigo, &text)?;
-        }
-        PasteMethod::CtrlV | PasteMethod::CtrlShiftV | PasteMethod::ShiftInsert => {
-            paste_via_clipboard(
-                &mut enigo,
-                &text,
-                &app_handle,
-                &paste_method,
-                paste_delay_ms,
-            )?
-        }
+    } else {
+        // No trigger words - use original behavior
+        paste_segment(&mut enigo, &text, &app_handle, &paste_method, paste_delay_ms)?;
     }
 
     // After pasting, optionally copy to clipboard based on settings
@@ -499,5 +755,27 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
             .map_err(|e| format!("Failed to copy to clipboard: {}", e))?;
     }
 
+    Ok(())
+}
+
+/// Paste a single text segment using the configured method.
+fn paste_segment(
+    enigo: &mut Enigo,
+    text: &str,
+    app_handle: &AppHandle,
+    paste_method: &PasteMethod,
+    paste_delay_ms: u64,
+) -> Result<(), String> {
+    match paste_method {
+        PasteMethod::None => {
+            info!("PasteMethod::None selected - skipping paste action");
+        }
+        PasteMethod::Direct => {
+            paste_direct(enigo, text)?;
+        }
+        PasteMethod::CtrlV | PasteMethod::CtrlShiftV | PasteMethod::ShiftInsert => {
+            paste_via_clipboard(enigo, text, app_handle, paste_method, paste_delay_ms)?;
+        }
+    }
     Ok(())
 }

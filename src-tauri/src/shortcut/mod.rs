@@ -21,8 +21,8 @@ use tauri_plugin_autostart::ManagerExt;
 
 use crate::settings::{
     self, get_settings, ClipboardHandling, KeyboardImplementation, LLMPrompt, OverlayPosition,
-    PasteMethod, ShortcutBinding, SoundTheme, APPLE_INTELLIGENCE_DEFAULT_MODEL_ID,
-    APPLE_INTELLIGENCE_PROVIDER_ID,
+    PasteMethod, ShortcutBinding, SoundTheme, TriggerActionType, TriggerWord,
+    APPLE_INTELLIGENCE_DEFAULT_MODEL_ID, APPLE_INTELLIGENCE_PROVIDER_ID,
 };
 use crate::tray;
 
@@ -619,6 +619,105 @@ pub fn change_update_checks_setting(app: AppHandle, enabled: bool) -> Result<(),
 pub fn update_custom_words(app: AppHandle, words: Vec<String>) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.custom_words = words;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+// ============================================================================
+// Trigger Words Commands
+// ============================================================================
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_trigger_words_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.trigger_words_enabled = enabled;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn update_trigger_words(app: AppHandle, words: Vec<TriggerWord>) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.trigger_words = words;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn add_trigger_word(
+    app: AppHandle,
+    trigger_phrase: String,
+    action_type: TriggerActionType,
+    action_value: String,
+) -> Result<TriggerWord, String> {
+    let mut settings = settings::get_settings(&app);
+
+    // Generate unique ID
+    let id = format!("trigger_{}", chrono::Utc::now().timestamp_millis());
+
+    let new_trigger = TriggerWord {
+        id: id.clone(),
+        trigger_phrase,
+        action_type,
+        action_value,
+        enabled: true,
+        is_builtin: false,
+    };
+
+    settings.trigger_words.push(new_trigger.clone());
+    settings::write_settings(&app, settings);
+
+    Ok(new_trigger)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn update_trigger_word(
+    app: AppHandle,
+    id: String,
+    trigger_phrase: String,
+    action_type: TriggerActionType,
+    action_value: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+
+    if let Some(trigger) = settings.trigger_words.iter_mut().find(|t| t.id == id) {
+        trigger.trigger_phrase = trigger_phrase;
+        trigger.action_type = action_type;
+        trigger.action_value = action_value;
+        trigger.enabled = enabled;
+        settings::write_settings(&app, settings);
+        Ok(())
+    } else {
+        Err(format!("Trigger word with id '{}' not found", id))
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn delete_trigger_word(app: AppHandle, id: String) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+
+    // Check if it's a built-in trigger
+    if settings
+        .trigger_words
+        .iter()
+        .any(|t| t.id == id && t.is_builtin)
+    {
+        return Err("Cannot delete built-in trigger words".to_string());
+    }
+
+    let original_len = settings.trigger_words.len();
+    settings.trigger_words.retain(|t| t.id != id);
+
+    if settings.trigger_words.len() == original_len {
+        return Err(format!("Trigger word with id '{}' not found", id));
+    }
+
     settings::write_settings(&app, settings);
     Ok(())
 }

@@ -237,6 +237,18 @@
         "placeholder": "Add a word",
         "add": "Add",
         "remove": "Remove {{word}}"
+      },
+      "triggerWords": {
+        "title": "Trigger Words",
+        "description": "Replace spoken words with key presses or special characters. For example, say 'enter' to press the Enter key.",
+        "addNew": "Add Trigger Word",
+        "phrasePlaceholder": "Spoken phrase...",
+        "textPlaceholder": "Replacement text...",
+        "actionType": "Action Type",
+        "selectKey": "Select key",
+        "add": "Add",
+        "remove": "Remove {{phrase}}",
+        "builtin": "built-in"
       }
     },
     "postProcessing": {
