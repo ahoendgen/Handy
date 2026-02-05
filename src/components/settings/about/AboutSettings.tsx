@@ -45,7 +45,7 @@ export const AboutSettings: React.FC = () => {
           grouped={true}
         >
           {/* eslint-disable-next-line i18next/no-literal-string */}
-          <span className="text-sm font-mono">v{version}</span>
+          <span className="text-sm font-mono">v{version} Supercharged</span>
         </SettingContainer>
 
         <SettingContainer
