@@ -1,4 +1,22 @@
-# Handy
+# Handy Supercharged
+
+<p align="center">
+  <img src="docs/supercharged-logo.png" alt="Handy Supercharged" width="150">
+</p>
+
+> Personal fork of [Handy](https://github.com/cjpais/Handy) by [@ahoendgen](https://github.com/ahoendgen)
+
+This is not a standalone project. It's my personal, customized variant of Handy — a way to quickly implement features I need for my daily workflows without waiting for upstream releases. Changes that make sense for the broader community may be contributed back to the original project.
+
+## Supercharged Features
+
+Features added in this fork on top of upstream Handy:
+
+- **Trigger Words** — Define words or phrases that execute actions during transcription (e.g. say "enter" to press Enter, or "comma" to insert a comma). Includes built-in triggers and support for custom ones. Configurable per-language in Settings.
+- **Custom Branding** — Renamed to "Handy Supercharged" with electric blue color theme and lightning bolt tray icon. This is purely so I can easily tell both versions apart when running them side by side, especially when testing new upstream features.
+- **No Update Checker** — The upstream update check has been removed since this fork follows its own release cycle.
+
+---
 
 [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?style=for-the-badge&logo=discord&logoColor=white)](https://discord.com/invite/WVBeWsNXK4)
 
