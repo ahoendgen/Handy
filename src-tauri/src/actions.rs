@@ -336,20 +336,105 @@ impl ShortcutAction for TranscribeAction {
                             let mut post_processed_text: Option<String> = None;
                             let mut post_process_prompt: Option<String> = None;
 
+                            // Pre-extract trigger word segments from raw transcription
+                            // BEFORE any post-processing. This prevents LLM post-processing
+                            // from removing or modifying trigger phrases like "enter" or "tab".
+                            use crate::clipboard::{
+                                process_trigger_words, paste_with_segments, OutputSegment,
+                            };
+                            let mut pre_extracted_segments: Option<Vec<OutputSegment>> = None;
+
+                            if settings.trigger_words_enabled
+                                && !settings.trigger_words.is_empty()
+                            {
+                                let segments = process_trigger_words(
+                                    &final_text,
+                                    &settings.trigger_words,
+                                );
+                                let has_key_presses = segments
+                                    .iter()
+                                    .any(|s| matches!(s, OutputSegment::KeyPress(_)));
+
+                                if has_key_presses {
+                                    // Extract text parts for post-processing (without trigger phrases)
+                                    let text_parts: Vec<&str> = segments
+                                        .iter()
+                                        .filter_map(|s| match s {
+                                            OutputSegment::Text(t) => Some(t.as_str()),
+                                            _ => None,
+                                        })
+                                        .collect();
+                                    final_text = text_parts.join("\n");
+                                    pre_extracted_segments = Some(segments);
+                                    debug!(
+                                        "Pre-extracted {} trigger segments, clean text for processing: '{}'",
+                                        pre_extracted_segments.as_ref().unwrap().len(),
+                                        final_text
+                                    );
+                                } else if segments.len() == 1 {
+                                    // Only text replacements (no key presses) - use processed text directly
+                                    if let Some(OutputSegment::Text(t)) = segments.first() {
+                                        final_text = t.clone();
+                                    }
+                                }
+                            }
+
                             // First, check if Chinese variant conversion is needed
                             if let Some(converted_text) =
-                                maybe_convert_chinese_variant(&settings, &transcription).await
+                                maybe_convert_chinese_variant(&settings, &final_text).await
                             {
                                 final_text = converted_text;
                             }
 
                             // Then apply regular post-processing if enabled
-                            // Uses final_text which may already have Chinese conversion applied
+                            // Uses final_text which has trigger phrases already removed
                             if let Some(processed_text) =
                                 maybe_post_process_transcription(&settings, &final_text).await
                             {
                                 post_processed_text = Some(processed_text.clone());
-                                final_text = processed_text;
+
+                                if let Some(ref segments) = pre_extracted_segments {
+                                    // Reconstruct segments with LLM-processed text
+                                    let text_count = segments
+                                        .iter()
+                                        .filter(|s| matches!(s, OutputSegment::Text(_)))
+                                        .count();
+                                    let processed_parts: Vec<&str> =
+                                        processed_text.split('\n').collect();
+
+                                    if processed_parts.len() == text_count {
+                                        // LLM preserved structure - map processed text to segments
+                                        let mut part_iter = processed_parts.into_iter();
+                                        let new_segments: Vec<OutputSegment> = segments
+                                            .iter()
+                                            .map(|s| match s {
+                                                OutputSegment::Text(_) => OutputSegment::Text(
+                                                    part_iter
+                                                        .next()
+                                                        .unwrap_or("")
+                                                        .to_string(),
+                                                ),
+                                                OutputSegment::KeyPress(k) => {
+                                                    OutputSegment::KeyPress(k.clone())
+                                                }
+                                            })
+                                            .collect();
+                                        pre_extracted_segments = Some(new_segments);
+                                        final_text = processed_text;
+                                        debug!("Reconstructed segments with LLM-processed text");
+                                    } else {
+                                        // LLM changed structure - fall back to normal processing
+                                        debug!(
+                                            "LLM changed text structure ({} parts vs {} expected), falling back to normal trigger processing",
+                                            processed_parts.len(),
+                                            text_count
+                                        );
+                                        pre_extracted_segments = None;
+                                        final_text = processed_text;
+                                    }
+                                } else {
+                                    final_text = processed_text;
+                                }
 
                                 // Get the prompt that was used
                                 if let Some(prompt_id) = &settings.post_process_selected_prompt_id {
@@ -387,7 +472,16 @@ impl ShortcutAction for TranscribeAction {
                             let ah_clone = ah.clone();
                             let paste_time = Instant::now();
                             ah.run_on_main_thread(move || {
-                                match utils::paste(final_text, ah_clone.clone()) {
+                                let result = if let Some(segments) = pre_extracted_segments {
+                                    paste_with_segments(
+                                        segments,
+                                        &final_text,
+                                        ah_clone.clone(),
+                                    )
+                                } else {
+                                    utils::paste(final_text, ah_clone.clone())
+                                };
+                                match result {
                                     Ok(()) => debug!(
                                         "Text pasted successfully in {:?}",
                                         paste_time.elapsed()

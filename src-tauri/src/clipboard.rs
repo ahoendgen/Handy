@@ -438,15 +438,15 @@ fn send_key_combo_via_xdotool(paste_method: &PasteMethod) -> Result<(), String> 
 // ============================================================================
 
 /// Represents a segment of output - either text to type or a key to press
-#[derive(Debug, Clone)]
-enum OutputSegment {
+#[derive(Debug, Clone, PartialEq)]
+pub enum OutputSegment {
     Text(String),
     KeyPress(String),
 }
 
 /// Process text through trigger word replacement.
 /// Returns segments to be output (text and key presses interleaved).
-fn process_trigger_words(text: &str, trigger_words: &[TriggerWord]) -> Vec<OutputSegment> {
+pub fn process_trigger_words(text: &str, trigger_words: &[TriggerWord]) -> Vec<OutputSegment> {
     // Build a list of enabled triggers, sorted by phrase length (longest first)
     // to ensure longer phrases match before shorter ones
     let mut triggers: Vec<_> = trigger_words
@@ -700,6 +700,43 @@ fn paste_direct(enigo: &mut Enigo, text: &str) -> Result<(), String> {
     input::paste_text_direct(enigo, text)
 }
 
+/// Execute a list of output segments (text and key presses).
+fn execute_segments(
+    segments: &[OutputSegment],
+    enigo: &mut Enigo,
+    app_handle: &AppHandle,
+    paste_method: &PasteMethod,
+    paste_delay_ms: u64,
+) -> Result<(), String> {
+    for segment in segments {
+        match segment {
+            OutputSegment::Text(t) if !t.is_empty() => {
+                info!("Pasting text segment: '{}'", t);
+                paste_segment(enigo, t, app_handle, paste_method, paste_delay_ms)?;
+                // Wait for paste to complete before processing next segment
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            OutputSegment::KeyPress(key) => {
+                info!("Sending key press: '{}'", key);
+                // Try Linux native tools first, fall back to enigo
+                #[cfg(target_os = "linux")]
+                {
+                    if !send_key_press_linux(key)? {
+                        send_key_press(enigo, key)?;
+                    }
+                }
+                #[cfg(not(target_os = "linux"))]
+                send_key_press(enigo, key)?;
+
+                // Delay after key press to let the application process it
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
     let settings = get_settings(&app_handle);
     let paste_method = settings.paste_method;
@@ -729,34 +766,11 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
     // Process trigger words if enabled
     if settings.trigger_words_enabled && !settings.trigger_words.is_empty() {
         let segments = process_trigger_words(&text, &settings.trigger_words);
-        info!("Trigger words enabled, processing {} segments", segments.len());
-
-        for segment in &segments {
-            match segment {
-                OutputSegment::Text(t) if !t.is_empty() => {
-                    info!("Pasting text segment: '{}'", t);
-                    paste_segment(&mut enigo, t, &app_handle, &paste_method, paste_delay_ms)?;
-                    // Wait for paste to complete before processing next segment
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                OutputSegment::KeyPress(key) => {
-                    info!("Sending key press: '{}'", key);
-                    // Try Linux native tools first, fall back to enigo
-                    #[cfg(target_os = "linux")]
-                    {
-                        if !send_key_press_linux(key)? {
-                            send_key_press(&mut enigo, key)?;
-                        }
-                    }
-                    #[cfg(not(target_os = "linux"))]
-                    send_key_press(&mut enigo, key)?;
-
-                    // Delay after key press to let the application process it
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                _ => {}
-            }
-        }
+        info!(
+            "Trigger words enabled, processing {} segments",
+            segments.len()
+        );
+        execute_segments(&segments, &mut enigo, &app_handle, &paste_method, paste_delay_ms)?;
     } else {
         // No trigger words - use original behavior
         paste_segment(&mut enigo, &text, &app_handle, &paste_method, paste_delay_ms)?;
@@ -767,6 +781,59 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
         let clipboard = app_handle.clipboard();
         clipboard
             .write_text(&text)
+            .map_err(|e| format!("Failed to copy to clipboard: {}", e))?;
+    }
+
+    Ok(())
+}
+
+/// Paste pre-processed segments directly, bypassing trigger word detection.
+/// Use this when trigger words were extracted earlier in the pipeline
+/// (e.g., before LLM post-processing) and segments are ready to paste.
+pub fn paste_with_segments(
+    mut segments: Vec<OutputSegment>,
+    text_for_clipboard: &str,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    let settings = get_settings(&app_handle);
+    let paste_method = settings.paste_method;
+    let paste_delay_ms = settings.paste_delay_ms;
+
+    info!(
+        "Using paste method: {:?}, delay: {}ms (pre-extracted segments)",
+        paste_method, paste_delay_ms
+    );
+
+    // Append trailing space to last text segment if configured
+    if settings.append_trailing_space {
+        for seg in segments.iter_mut().rev() {
+            if let OutputSegment::Text(ref mut t) = seg {
+                t.push(' ');
+                break;
+            }
+        }
+    }
+
+    // Get the managed Enigo instance
+    let enigo_state = app_handle
+        .try_state::<EnigoState>()
+        .ok_or("Enigo state not initialized")?;
+    let mut enigo = enigo_state
+        .0
+        .lock()
+        .map_err(|e| format!("Failed to lock Enigo: {}", e))?;
+
+    info!(
+        "Processing {} pre-extracted segments",
+        segments.len()
+    );
+    execute_segments(&segments, &mut enigo, &app_handle, &paste_method, paste_delay_ms)?;
+
+    // After pasting, optionally copy clean text to clipboard
+    if settings.clipboard_handling == ClipboardHandling::CopyToClipboard {
+        let clipboard = app_handle.clipboard();
+        clipboard
+            .write_text(text_for_clipboard)
             .map_err(|e| format!("Failed to copy to clipboard: {}", e))?;
     }
 
@@ -944,6 +1011,85 @@ mod tests {
     }
 
     #[test]
+    fn test_process_trigger_words_same_trigger_multiple_times() {
+        let triggers = vec![
+            make_trigger("enter", TriggerActionType::KeyPress, "enter"),
+        ];
+
+        let segments = process_trigger_words("first paragraph enter second paragraph enter third paragraph", &triggers);
+        // Should be: Text, KeyPress, Text, KeyPress, Text = 5 segments
+        assert_eq!(segments.len(), 5, "Expected 5 segments, got: {:?}", segments);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "first paragraph"),
+            _ => panic!("Expected text segment, got {:?}", segments[0]),
+        }
+        match &segments[1] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment, got {:?}", segments[1]),
+        }
+        match &segments[2] {
+            OutputSegment::Text(t) => assert_eq!(t, "second paragraph"),
+            _ => panic!("Expected text segment, got {:?}", segments[2]),
+        }
+        match &segments[3] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment, got {:?}", segments[3]),
+        }
+        match &segments[4] {
+            OutputSegment::Text(t) => assert_eq!(t, "third paragraph"),
+            _ => panic!("Expected text segment, got {:?}", segments[4]),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_same_trigger_three_times_consecutive() {
+        let triggers = vec![
+            make_trigger("enter", TriggerActionType::KeyPress, "enter"),
+        ];
+
+        // Three enters in a row
+        let segments = process_trigger_words("hello enter enter enter world", &triggers);
+        assert_eq!(segments.len(), 5, "Expected 5 segments, got: {:?}", segments);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "hello"),
+            _ => panic!("Expected text segment"),
+        }
+        match &segments[1] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment"),
+        }
+        match &segments[2] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment"),
+        }
+        match &segments[3] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment"),
+        }
+        match &segments[4] {
+            OutputSegment::Text(t) => assert_eq!(t, "world"),
+            _ => panic!("Expected text segment"),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_text_replacement_multiple_times() {
+        let triggers = vec![
+            make_trigger("period", TriggerActionType::TextReplacement, "."),
+        ];
+
+        let segments = process_trigger_words("first sentence period second sentence period third sentence", &triggers);
+        assert_eq!(segments.len(), 1, "All text replacements should merge into one text segment, got: {:?}", segments);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "first sentence . second sentence . third sentence"),
+            _ => panic!("Expected merged text segment"),
+        }
+    }
+
+    #[test]
     fn test_process_trigger_words_multiple_triggers() {
         let triggers = vec![
             make_trigger("enter", TriggerActionType::KeyPress, "enter"),
@@ -968,6 +1114,81 @@ mod tests {
         match &segments[3] {
             OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
             _ => panic!("Expected keypress segment"),
+        }
+    }
+
+    /// Simulates the full pipeline: extract triggers from raw transcription,
+    /// join text for LLM processing, simulate LLM output, reconstruct segments.
+    #[test]
+    fn test_pipeline_extract_then_reconstruct_with_llm() {
+        let triggers = vec![
+            make_trigger("enter", TriggerActionType::KeyPress, "enter"),
+        ];
+
+        // Step 1: Raw transcription with trigger words
+        let raw = "first paragraph enter second paragraph enter third paragraph";
+        let segments = process_trigger_words(raw, &triggers);
+        assert_eq!(segments.len(), 5);
+
+        // Step 2: Extract text parts for LLM processing
+        let text_parts: Vec<&str> = segments
+            .iter()
+            .filter_map(|s| match s {
+                OutputSegment::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        let clean_text = text_parts.join("\n");
+        assert_eq!(clean_text, "first paragraph\nsecond paragraph\nthird paragraph");
+
+        // Step 3: Simulate LLM post-processing (capitalizes, adds periods)
+        let llm_output = "First paragraph.\nSecond paragraph.\nThird paragraph.";
+
+        // Step 4: Reconstruct segments with LLM-processed text
+        let text_count = segments
+            .iter()
+            .filter(|s| matches!(s, OutputSegment::Text(_)))
+            .count();
+        let processed_parts: Vec<&str> = llm_output.split('\n').collect();
+        assert_eq!(processed_parts.len(), text_count);
+
+        let mut part_iter = processed_parts.into_iter();
+        let reconstructed: Vec<OutputSegment> = segments
+            .iter()
+            .map(|s| match s {
+                OutputSegment::Text(_) => {
+                    OutputSegment::Text(part_iter.next().unwrap().to_string())
+                }
+                OutputSegment::KeyPress(k) => OutputSegment::KeyPress(k.clone()),
+            })
+            .collect();
+
+        // Verify: LLM-processed text with keypresses at original positions
+        assert_eq!(reconstructed.len(), 5);
+        assert_eq!(reconstructed[0], OutputSegment::Text("First paragraph.".to_string()));
+        assert_eq!(reconstructed[1], OutputSegment::KeyPress("enter".to_string()));
+        assert_eq!(reconstructed[2], OutputSegment::Text("Second paragraph.".to_string()));
+        assert_eq!(reconstructed[3], OutputSegment::KeyPress("enter".to_string()));
+        assert_eq!(reconstructed[4], OutputSegment::Text("Third paragraph.".to_string()));
+    }
+
+    /// Tests that text replacements (like "period" -> ".") are applied before
+    /// the text would go to LLM, so the LLM sees proper punctuation.
+    #[test]
+    fn test_text_replacements_applied_before_llm() {
+        let triggers = vec![
+            make_trigger("period", TriggerActionType::TextReplacement, "."),
+            make_trigger("comma", TriggerActionType::TextReplacement, ","),
+        ];
+
+        let raw = "hello period how are you comma I am fine";
+        let segments = process_trigger_words(raw, &triggers);
+
+        // All text replacements merge into one text segment
+        assert_eq!(segments.len(), 1);
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "hello . how are you , I am fine"),
+            _ => panic!("Expected text segment"),
         }
     }
 }
