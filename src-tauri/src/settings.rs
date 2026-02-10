@@ -241,6 +241,34 @@ impl SoundTheme {
     }
 }
 
+/// Defines the type of action a trigger word performs
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerActionType {
+    /// Replace with text (e.g., "." for period)
+    TextReplacement,
+    /// Simulate a key press (e.g., Enter, Tab)
+    KeyPress,
+}
+
+/// Defines a trigger word and its replacement action
+#[derive(Serialize, Deserialize, Debug, Clone, Type)]
+pub struct TriggerWord {
+    /// Unique identifier for this trigger
+    pub id: String,
+    /// The spoken phrase that activates this trigger (e.g., "new line", "enter")
+    pub trigger_phrase: String,
+    /// The type of action to perform
+    pub action_type: TriggerActionType,
+    /// For TextReplacement: the replacement text
+    /// For KeyPress: the key name (e.g., "enter", "tab", "backspace")
+    pub action_value: String,
+    /// Whether this trigger is currently enabled
+    pub enabled: bool,
+    /// Whether this is a built-in (non-deletable) trigger
+    pub is_builtin: bool,
+}
+
 /* still handy for composing the initial JSON in the store ------------- */
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
 pub struct AppSettings {
@@ -317,6 +345,10 @@ pub struct AppSettings {
     pub keyboard_implementation: KeyboardImplementation,
     #[serde(default = "default_paste_delay_ms")]
     pub paste_delay_ms: u64,
+    #[serde(default = "default_trigger_words_enabled")]
+    pub trigger_words_enabled: bool,
+    #[serde(default = "default_trigger_words")]
+    pub trigger_words: Vec<TriggerWord>,
 }
 
 fn default_model() -> String {
@@ -368,6 +400,73 @@ fn default_word_correction_threshold() -> f64 {
 
 fn default_paste_delay_ms() -> u64 {
     60
+}
+
+fn default_trigger_words_enabled() -> bool {
+    false
+}
+
+fn default_trigger_words() -> Vec<TriggerWord> {
+    vec![
+        // Control keys
+        TriggerWord {
+            id: "builtin_enter".to_string(),
+            trigger_phrase: "enter".to_string(),
+            action_type: TriggerActionType::KeyPress,
+            action_value: "enter".to_string(),
+            enabled: true,
+            is_builtin: true,
+        },
+        TriggerWord {
+            id: "builtin_new_line".to_string(),
+            trigger_phrase: "new line".to_string(),
+            action_type: TriggerActionType::TextReplacement,
+            action_value: "\n".to_string(),
+            enabled: true,
+            is_builtin: true,
+        },
+        TriggerWord {
+            id: "builtin_tab".to_string(),
+            trigger_phrase: "tab".to_string(),
+            action_type: TriggerActionType::KeyPress,
+            action_value: "tab".to_string(),
+            enabled: true,
+            is_builtin: true,
+        },
+        TriggerWord {
+            id: "builtin_backspace".to_string(),
+            trigger_phrase: "backspace".to_string(),
+            action_type: TriggerActionType::KeyPress,
+            action_value: "backspace".to_string(),
+            enabled: true,
+            is_builtin: true,
+        },
+        // Text replacements
+        TriggerWord {
+            id: "builtin_period".to_string(),
+            trigger_phrase: "period".to_string(),
+            action_type: TriggerActionType::TextReplacement,
+            action_value: ".".to_string(),
+            enabled: true,
+            is_builtin: true,
+        },
+        TriggerWord {
+            id: "builtin_comma".to_string(),
+            trigger_phrase: "comma".to_string(),
+            action_type: TriggerActionType::TextReplacement,
+            action_value: ",".to_string(),
+            enabled: true,
+            is_builtin: true,
+        },
+        TriggerWord {
+            id: "builtin_question_mark".to_string(),
+            trigger_phrase: "question mark".to_string(),
+            action_type: TriggerActionType::TextReplacement,
+            action_value: "?".to_string(),
+            enabled: true,
+            is_builtin: true,
+        },
+    ]
 }
 
 fn default_history_limit() -> usize {
@@ -612,6 +711,8 @@ pub fn get_default_settings() -> AppSettings {
         experimental_enabled: false,
         keyboard_implementation: KeyboardImplementation::default(),
         paste_delay_ms: default_paste_delay_ms(),
+        trigger_words_enabled: default_trigger_words_enabled(),
+        trigger_words: default_trigger_words(),
     }
 }
 

@@ -221,6 +221,46 @@ async updateCustomWords(words: string[]) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async changeTriggerWordsEnabledSetting(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_trigger_words_enabled_setting", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async updateTriggerWords(words: TriggerWord[]) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("update_trigger_words", { words }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async addTriggerWord(triggerPhrase: string, actionType: TriggerActionType, actionValue: string) : Promise<Result<TriggerWord, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("add_trigger_word", { triggerPhrase, actionType, actionValue }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async updateTriggerWord(id: string, triggerPhrase: string, actionType: TriggerActionType, actionValue: string, enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("update_trigger_word", { id, triggerPhrase, actionType, actionValue, enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async deleteTriggerWord(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_trigger_word", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Temporarily unregister a binding while the user is editing it in the UI.
  * This avoids firing the action while keys are being recorded.
@@ -703,7 +743,7 @@ async isLaptop() : Promise<Result<boolean, string>> {
 
 /** user-defined types **/
 
-export type AppSettings = { bindings: Partial<{ [key in string]: ShortcutBinding }>; push_to_talk: boolean; audio_feedback: boolean; audio_feedback_volume?: number; sound_theme?: SoundTheme; start_hidden?: boolean; autostart_enabled?: boolean; update_checks_enabled?: boolean; selected_model?: string; always_on_microphone?: boolean; selected_microphone?: string | null; clamshell_microphone?: string | null; selected_output_device?: string | null; translate_to_english?: boolean; selected_language?: string; overlay_position?: OverlayPosition; debug_mode?: boolean; log_level?: LogLevel; custom_words?: string[]; model_unload_timeout?: ModelUnloadTimeout; word_correction_threshold?: number; history_limit?: number; recording_retention_period?: RecordingRetentionPeriod; paste_method?: PasteMethod; clipboard_handling?: ClipboardHandling; post_process_enabled?: boolean; post_process_provider_id?: string; post_process_providers?: PostProcessProvider[]; post_process_api_keys?: Partial<{ [key in string]: string }>; post_process_models?: Partial<{ [key in string]: string }>; post_process_prompts?: LLMPrompt[]; post_process_selected_prompt_id?: string | null; mute_while_recording?: boolean; append_trailing_space?: boolean; app_language?: string; experimental_enabled?: boolean; keyboard_implementation?: KeyboardImplementation; paste_delay_ms?: number }
+export type AppSettings = { bindings: Partial<{ [key in string]: ShortcutBinding }>; push_to_talk: boolean; audio_feedback: boolean; audio_feedback_volume?: number; sound_theme?: SoundTheme; start_hidden?: boolean; autostart_enabled?: boolean; update_checks_enabled?: boolean; selected_model?: string; always_on_microphone?: boolean; selected_microphone?: string | null; clamshell_microphone?: string | null; selected_output_device?: string | null; translate_to_english?: boolean; selected_language?: string; overlay_position?: OverlayPosition; debug_mode?: boolean; log_level?: LogLevel; custom_words?: string[]; model_unload_timeout?: ModelUnloadTimeout; word_correction_threshold?: number; history_limit?: number; recording_retention_period?: RecordingRetentionPeriod; paste_method?: PasteMethod; clipboard_handling?: ClipboardHandling; post_process_enabled?: boolean; post_process_provider_id?: string; post_process_providers?: PostProcessProvider[]; post_process_api_keys?: Partial<{ [key in string]: string }>; post_process_models?: Partial<{ [key in string]: string }>; post_process_prompts?: LLMPrompt[]; post_process_selected_prompt_id?: string | null; mute_while_recording?: boolean; append_trailing_space?: boolean; app_language?: string; experimental_enabled?: boolean; keyboard_implementation?: KeyboardImplementation; paste_delay_ms?: number; trigger_words_enabled?: boolean; trigger_words?: TriggerWord[] }
 export type AudioDevice = { index: string; name: string; is_default: boolean }
 export type BindingResponse = { success: boolean; binding: ShortcutBinding | null; error: string | null }
 export type ClipboardHandling = "dont_modify" | "copy_to_clipboard"
@@ -730,6 +770,47 @@ export type PostProcessProvider = { id: string; label: string; base_url: string;
 export type RecordingRetentionPeriod = "never" | "preserve_limit" | "days_3" | "weeks_2" | "months_3"
 export type ShortcutBinding = { id: string; name: string; description: string; default_binding: string; current_binding: string }
 export type SoundTheme = "marimba" | "pop" | "custom"
+/**
+ * Defines the type of action a trigger word performs
+ */
+export type TriggerActionType = 
+/**
+ * Replace with text (e.g., "." for period)
+ */
+"text_replacement" | 
+/**
+ * Simulate a key press (e.g., Enter, Tab)
+ */
+"key_press"
+/**
+ * Defines a trigger word and its replacement action
+ */
+export type TriggerWord = { 
+/**
+ * Unique identifier for this trigger
+ */
+id: string; 
+/**
+ * The spoken phrase that activates this trigger (e.g., "new line", "enter")
+ */
+trigger_phrase: string; 
+/**
+ * The type of action to perform
+ */
+action_type: TriggerActionType; 
+/**
+ * For TextReplacement: the replacement text
+ * For KeyPress: the key name (e.g., "enter", "tab", "backspace")
+ */
+action_value: string; 
+/**
+ * Whether this trigger is currently enabled
+ */
+enabled: boolean; 
+/**
+ * Whether this is a built-in (non-deletable) trigger
+ */
+is_builtin: boolean }
 
 /** tauri-specta globals **/
 

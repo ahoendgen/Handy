@@ -1,6 +1,6 @@
 use crate::input::{self, EnigoState};
-use crate::settings::{get_settings, ClipboardHandling, PasteMethod};
-use enigo::Enigo;
+use crate::settings::{get_settings, ClipboardHandling, PasteMethod, TriggerActionType, TriggerWord};
+use enigo::{Enigo, Key, Keyboard};
 use log::info;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
@@ -433,6 +433,260 @@ fn send_key_combo_via_xdotool(paste_method: &PasteMethod) -> Result<(), String> 
     Ok(())
 }
 
+// ============================================================================
+// Trigger Word Processing
+// ============================================================================
+
+/// Represents a segment of output - either text to type or a key to press
+#[derive(Debug, Clone, PartialEq)]
+pub enum OutputSegment {
+    Text(String),
+    KeyPress(String),
+}
+
+/// Process text through trigger word replacement.
+/// Returns segments to be output (text and key presses interleaved).
+pub fn process_trigger_words(text: &str, trigger_words: &[TriggerWord]) -> Vec<OutputSegment> {
+    // Build a list of enabled triggers, sorted by phrase length (longest first)
+    // to ensure longer phrases match before shorter ones
+    let mut triggers: Vec<_> = trigger_words
+        .iter()
+        .filter(|t| t.enabled)
+        .collect();
+    triggers.sort_by(|a, b| b.trigger_phrase.len().cmp(&a.trigger_phrase.len()));
+
+    if triggers.is_empty() {
+        return vec![OutputSegment::Text(text.to_string())];
+    }
+
+    let mut segments = Vec::new();
+    let mut remaining = text.to_string();
+
+    while !remaining.is_empty() {
+        let remaining_lower = remaining.to_lowercase();
+
+        // Find the trigger with the earliest position in the text
+        let mut earliest_match: Option<(usize, &TriggerWord)> = None;
+
+        for trigger in &triggers {
+            let phrase_lower = trigger.trigger_phrase.to_lowercase();
+
+            if let Some(pos) = find_word_boundary_match(&remaining_lower, &phrase_lower) {
+                match &earliest_match {
+                    None => earliest_match = Some((pos, trigger)),
+                    Some((earliest_pos, earliest_trigger)) => {
+                        // Prefer earlier position, or longer phrase at same position
+                        if pos < *earliest_pos
+                            || (pos == *earliest_pos
+                                && trigger.trigger_phrase.len()
+                                    > earliest_trigger.trigger_phrase.len())
+                        {
+                            earliest_match = Some((pos, trigger));
+                        }
+                    }
+                }
+            }
+        }
+
+        match earliest_match {
+            Some((pos, trigger)) => {
+                // Add text before the trigger as a text segment
+                if pos > 0 {
+                    let before = &remaining[..pos];
+                    // Trim trailing space before a trigger
+                    let before_trimmed = before.trim_end();
+                    if !before_trimmed.is_empty() {
+                        segments.push(OutputSegment::Text(before_trimmed.to_string()));
+                    }
+                }
+
+                // Add the trigger action
+                match trigger.action_type {
+                    TriggerActionType::TextReplacement => {
+                        segments.push(OutputSegment::Text(trigger.action_value.clone()));
+                    }
+                    TriggerActionType::KeyPress => {
+                        segments.push(OutputSegment::KeyPress(trigger.action_value.clone()));
+                    }
+                }
+
+                // Continue with the text after the trigger
+                let end_pos = pos + trigger.trigger_phrase.len();
+                remaining = if end_pos < remaining.len() {
+                    let after = &remaining[end_pos..];
+                    // Skip trailing punctuation directly after a KeyPress trigger
+                    // (e.g., "enter." -> the "." is added by speech recognition)
+                    let after = if trigger.action_type == TriggerActionType::KeyPress {
+                        after.trim_start_matches(|c: char| c.is_ascii_punctuation() && c != '\'')
+                    } else {
+                        after
+                    };
+                    // Skip any leading space after the trigger
+                    after.trim_start().to_string()
+                } else {
+                    String::new()
+                };
+            }
+            None => {
+                // No trigger found - add remaining text and break
+                segments.push(OutputSegment::Text(remaining));
+                break;
+            }
+        }
+    }
+
+    // Merge consecutive text segments
+    merge_text_segments(segments)
+}
+
+/// Find a trigger phrase at a word boundary in the text.
+/// Returns the position if found, None otherwise.
+fn find_word_boundary_match(text: &str, phrase: &str) -> Option<usize> {
+    let mut search_start = 0;
+
+    while let Some(relative_pos) = text[search_start..].find(phrase) {
+        let pos = search_start + relative_pos;
+        let end_pos = pos + phrase.len();
+
+        // Check if it's at a word boundary
+        let at_start = pos == 0 || !text[..pos].chars().last().unwrap_or(' ').is_alphanumeric();
+        let at_end = end_pos >= text.len()
+            || !text[end_pos..].chars().next().unwrap_or(' ').is_alphanumeric();
+
+        if at_start && at_end {
+            return Some(pos);
+        }
+
+        // Continue searching after this position
+        search_start = pos + 1;
+        if search_start >= text.len() {
+            break;
+        }
+    }
+
+    None
+}
+
+/// Merge consecutive text segments into single segments.
+fn merge_text_segments(segments: Vec<OutputSegment>) -> Vec<OutputSegment> {
+    let mut merged = Vec::new();
+    let mut current_text = String::new();
+
+    for segment in segments {
+        match segment {
+            OutputSegment::Text(t) => {
+                if !current_text.is_empty() {
+                    current_text.push(' ');
+                }
+                current_text.push_str(&t);
+            }
+            OutputSegment::KeyPress(k) => {
+                if !current_text.is_empty() {
+                    merged.push(OutputSegment::Text(current_text));
+                    current_text = String::new();
+                }
+                merged.push(OutputSegment::KeyPress(k));
+            }
+        }
+    }
+
+    if !current_text.is_empty() {
+        merged.push(OutputSegment::Text(current_text));
+    }
+
+    merged
+}
+
+/// Send a key press using enigo.
+fn send_key_press(enigo: &mut Enigo, key_name: &str) -> Result<(), String> {
+    let key = match key_name.to_lowercase().as_str() {
+        "enter" | "return" => Key::Return,
+        "tab" => Key::Tab,
+        "backspace" => Key::Backspace,
+        "escape" | "esc" => Key::Escape,
+        "space" => Key::Space,
+        "delete" | "del" => Key::Delete,
+        "up" | "uparrow" => Key::UpArrow,
+        "down" | "downarrow" => Key::DownArrow,
+        "left" | "leftarrow" => Key::LeftArrow,
+        "right" | "rightarrow" => Key::RightArrow,
+        "home" => Key::Home,
+        "end" => Key::End,
+        "pageup" => Key::PageUp,
+        "pagedown" => Key::PageDown,
+        _ => return Err(format!("Unknown key: {}", key_name)),
+    };
+
+    // Use Press + Release instead of Click for better compatibility
+    enigo
+        .key(key, enigo::Direction::Press)
+        .map_err(|e| format!("Failed to press key '{}': {}", key_name, e))?;
+
+    std::thread::sleep(Duration::from_millis(10));
+
+    enigo
+        .key(key, enigo::Direction::Release)
+        .map_err(|e| format!("Failed to release key '{}': {}", key_name, e))
+}
+
+/// Send a key press using Linux native tools (for Wayland/X11 compatibility).
+#[cfg(target_os = "linux")]
+fn send_key_press_linux(key_name: &str) -> Result<bool, String> {
+    use crate::utils::{is_kde_wayland, is_wayland};
+
+    let key_arg = match key_name.to_lowercase().as_str() {
+        "enter" | "return" => "Return",
+        "tab" => "Tab",
+        "backspace" => "BackSpace",
+        "escape" | "esc" => "Escape",
+        "space" => "space",
+        "delete" | "del" => "Delete",
+        _ => return Ok(false), // Let enigo handle other keys
+    };
+
+    if is_wayland() {
+        // On Wayland, use wtype (unless KDE), dotool, or ydotool
+        if !is_kde_wayland() && is_wtype_available() {
+            let output = std::process::Command::new("wtype")
+                .arg("-k")
+                .arg(key_arg)
+                .output()
+                .map_err(|e| format!("Failed to execute wtype: {}", e))?;
+
+            if output.status.success() {
+                return Ok(true);
+            }
+        }
+
+        if is_dotool_available() {
+            let command = format!("echo key {} | dotool", key_arg.to_lowercase());
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&command)
+                .output()
+                .map_err(|e| format!("Failed to execute dotool: {}", e))?;
+
+            if output.status.success() {
+                return Ok(true);
+            }
+        }
+    } else if is_xdotool_available() {
+        // On X11, use xdotool
+        let output = std::process::Command::new("xdotool")
+            .arg("key")
+            .arg("--clearmodifiers")
+            .arg(key_arg)
+            .output()
+            .map_err(|e| format!("Failed to execute xdotool: {}", e))?;
+
+        if output.status.success() {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 /// Types text directly by simulating individual key presses.
 fn paste_direct(enigo: &mut Enigo, text: &str) -> Result<(), String> {
     #[cfg(target_os = "linux")]
@@ -444,6 +698,43 @@ fn paste_direct(enigo: &mut Enigo, text: &str) -> Result<(), String> {
     }
 
     input::paste_text_direct(enigo, text)
+}
+
+/// Execute a list of output segments (text and key presses).
+fn execute_segments(
+    segments: &[OutputSegment],
+    enigo: &mut Enigo,
+    app_handle: &AppHandle,
+    paste_method: &PasteMethod,
+    paste_delay_ms: u64,
+) -> Result<(), String> {
+    for segment in segments {
+        match segment {
+            OutputSegment::Text(t) if !t.is_empty() => {
+                info!("Pasting text segment: '{}'", t);
+                paste_segment(enigo, t, app_handle, paste_method, paste_delay_ms)?;
+                // Wait for paste to complete before processing next segment
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            OutputSegment::KeyPress(key) => {
+                info!("Sending key press: '{}'", key);
+                // Try Linux native tools first, fall back to enigo
+                #[cfg(target_os = "linux")]
+                {
+                    if !send_key_press_linux(key)? {
+                        send_key_press(enigo, key)?;
+                    }
+                }
+                #[cfg(not(target_os = "linux"))]
+                send_key_press(enigo, key)?;
+
+                // Delay after key press to let the application process it
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
@@ -472,23 +763,17 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
         .lock()
         .map_err(|e| format!("Failed to lock Enigo: {}", e))?;
 
-    // Perform the paste operation
-    match paste_method {
-        PasteMethod::None => {
-            info!("PasteMethod::None selected - skipping paste action");
-        }
-        PasteMethod::Direct => {
-            paste_direct(&mut enigo, &text)?;
-        }
-        PasteMethod::CtrlV | PasteMethod::CtrlShiftV | PasteMethod::ShiftInsert => {
-            paste_via_clipboard(
-                &mut enigo,
-                &text,
-                &app_handle,
-                &paste_method,
-                paste_delay_ms,
-            )?
-        }
+    // Process trigger words if enabled
+    if settings.trigger_words_enabled && !settings.trigger_words.is_empty() {
+        let segments = process_trigger_words(&text, &settings.trigger_words);
+        info!(
+            "Trigger words enabled, processing {} segments",
+            segments.len()
+        );
+        execute_segments(&segments, &mut enigo, &app_handle, &paste_method, paste_delay_ms)?;
+    } else {
+        // No trigger words - use original behavior
+        paste_segment(&mut enigo, &text, &app_handle, &paste_method, paste_delay_ms)?;
     }
 
     // After pasting, optionally copy to clipboard based on settings
@@ -500,4 +785,410 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Paste pre-processed segments directly, bypassing trigger word detection.
+/// Use this when trigger words were extracted earlier in the pipeline
+/// (e.g., before LLM post-processing) and segments are ready to paste.
+pub fn paste_with_segments(
+    mut segments: Vec<OutputSegment>,
+    text_for_clipboard: &str,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    let settings = get_settings(&app_handle);
+    let paste_method = settings.paste_method;
+    let paste_delay_ms = settings.paste_delay_ms;
+
+    info!(
+        "Using paste method: {:?}, delay: {}ms (pre-extracted segments)",
+        paste_method, paste_delay_ms
+    );
+
+    // Append trailing space to last text segment if configured
+    if settings.append_trailing_space {
+        for seg in segments.iter_mut().rev() {
+            if let OutputSegment::Text(ref mut t) = seg {
+                t.push(' ');
+                break;
+            }
+        }
+    }
+
+    // Get the managed Enigo instance
+    let enigo_state = app_handle
+        .try_state::<EnigoState>()
+        .ok_or("Enigo state not initialized")?;
+    let mut enigo = enigo_state
+        .0
+        .lock()
+        .map_err(|e| format!("Failed to lock Enigo: {}", e))?;
+
+    info!(
+        "Processing {} pre-extracted segments",
+        segments.len()
+    );
+    execute_segments(&segments, &mut enigo, &app_handle, &paste_method, paste_delay_ms)?;
+
+    // After pasting, optionally copy clean text to clipboard
+    if settings.clipboard_handling == ClipboardHandling::CopyToClipboard {
+        let clipboard = app_handle.clipboard();
+        clipboard
+            .write_text(text_for_clipboard)
+            .map_err(|e| format!("Failed to copy to clipboard: {}", e))?;
+    }
+
+    Ok(())
+}
+
+/// Paste a single text segment using the configured method.
+fn paste_segment(
+    enigo: &mut Enigo,
+    text: &str,
+    app_handle: &AppHandle,
+    paste_method: &PasteMethod,
+    paste_delay_ms: u64,
+) -> Result<(), String> {
+    match paste_method {
+        PasteMethod::None => {
+            info!("PasteMethod::None selected - skipping paste action");
+        }
+        PasteMethod::Direct => {
+            paste_direct(enigo, text)?;
+        }
+        PasteMethod::CtrlV | PasteMethod::CtrlShiftV | PasteMethod::ShiftInsert => {
+            paste_via_clipboard(enigo, text, app_handle, paste_method, paste_delay_ms)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_trigger(phrase: &str, action_type: TriggerActionType, action_value: &str) -> TriggerWord {
+        TriggerWord {
+            id: format!("test_{}", phrase),
+            trigger_phrase: phrase.to_string(),
+            action_type,
+            action_value: action_value.to_string(),
+            enabled: true,
+            is_builtin: false,
+        }
+    }
+
+    #[test]
+    fn test_find_word_boundary_match_basic() {
+        assert_eq!(find_word_boundary_match("hello enter world", "enter"), Some(6));
+        assert_eq!(find_word_boundary_match("enter world", "enter"), Some(0));
+        assert_eq!(find_word_boundary_match("hello enter", "enter"), Some(6));
+    }
+
+    #[test]
+    fn test_find_word_boundary_match_no_partial() {
+        // Should NOT match partial words
+        assert_eq!(find_word_boundary_match("entering the room", "enter"), None);
+        assert_eq!(find_word_boundary_match("center of attention", "enter"), None);
+        assert_eq!(find_word_boundary_match("reenter the building", "enter"), None);
+    }
+
+    #[test]
+    fn test_find_word_boundary_match_with_punctuation() {
+        assert_eq!(find_word_boundary_match("hello enter, world", "enter"), Some(6));
+        assert_eq!(find_word_boundary_match("hello enter. world", "enter"), Some(6));
+        assert_eq!(find_word_boundary_match("enter!", "enter"), Some(0));
+    }
+
+    #[test]
+    fn test_process_trigger_words_single_keypress() {
+        let triggers = vec![
+            make_trigger("enter", TriggerActionType::KeyPress, "enter"),
+        ];
+
+        let segments = process_trigger_words("hello enter world", &triggers);
+        assert_eq!(segments.len(), 3);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "hello"),
+            _ => panic!("Expected text segment"),
+        }
+        match &segments[1] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment"),
+        }
+        match &segments[2] {
+            OutputSegment::Text(t) => assert_eq!(t, "world"),
+            _ => panic!("Expected text segment"),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_text_replacement() {
+        let triggers = vec![
+            make_trigger("period", TriggerActionType::TextReplacement, "."),
+        ];
+
+        let segments = process_trigger_words("hello period", &triggers);
+        assert_eq!(segments.len(), 1);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "hello ."),
+            _ => panic!("Expected merged text segment"),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_punctuation_after_keypress() {
+        let triggers = vec![
+            make_trigger("enter", TriggerActionType::KeyPress, "enter"),
+        ];
+
+        // Punctuation after keypress trigger should be ignored
+        let segments = process_trigger_words("hello enter. world", &triggers);
+        assert_eq!(segments.len(), 3);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "hello"),
+            _ => panic!("Expected text segment"),
+        }
+        match &segments[1] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment"),
+        }
+        match &segments[2] {
+            OutputSegment::Text(t) => assert_eq!(t, "world"),
+            _ => panic!("Expected text segment"),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_at_end() {
+        let triggers = vec![
+            make_trigger("enter", TriggerActionType::KeyPress, "enter"),
+        ];
+
+        let segments = process_trigger_words("submit enter", &triggers);
+        assert_eq!(segments.len(), 2);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "submit"),
+            _ => panic!("Expected text segment"),
+        }
+        match &segments[1] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment"),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_disabled_trigger() {
+        let mut trigger = make_trigger("enter", TriggerActionType::KeyPress, "enter");
+        trigger.enabled = false;
+        let triggers = vec![trigger];
+
+        let segments = process_trigger_words("hello enter world", &triggers);
+        assert_eq!(segments.len(), 1);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "hello enter world"),
+            _ => panic!("Expected text segment"),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_case_insensitive() {
+        let triggers = vec![
+            make_trigger("enter", TriggerActionType::KeyPress, "enter"),
+        ];
+
+        let segments = process_trigger_words("hello ENTER world", &triggers);
+        assert_eq!(segments.len(), 3);
+
+        match &segments[1] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment"),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_same_trigger_multiple_times() {
+        let triggers = vec![
+            make_trigger("enter", TriggerActionType::KeyPress, "enter"),
+        ];
+
+        let segments = process_trigger_words("first paragraph enter second paragraph enter third paragraph", &triggers);
+        // Should be: Text, KeyPress, Text, KeyPress, Text = 5 segments
+        assert_eq!(segments.len(), 5, "Expected 5 segments, got: {:?}", segments);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "first paragraph"),
+            _ => panic!("Expected text segment, got {:?}", segments[0]),
+        }
+        match &segments[1] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment, got {:?}", segments[1]),
+        }
+        match &segments[2] {
+            OutputSegment::Text(t) => assert_eq!(t, "second paragraph"),
+            _ => panic!("Expected text segment, got {:?}", segments[2]),
+        }
+        match &segments[3] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment, got {:?}", segments[3]),
+        }
+        match &segments[4] {
+            OutputSegment::Text(t) => assert_eq!(t, "third paragraph"),
+            _ => panic!("Expected text segment, got {:?}", segments[4]),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_same_trigger_three_times_consecutive() {
+        let triggers = vec![
+            make_trigger("enter", TriggerActionType::KeyPress, "enter"),
+        ];
+
+        // Three enters in a row
+        let segments = process_trigger_words("hello enter enter enter world", &triggers);
+        assert_eq!(segments.len(), 5, "Expected 5 segments, got: {:?}", segments);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "hello"),
+            _ => panic!("Expected text segment"),
+        }
+        match &segments[1] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment"),
+        }
+        match &segments[2] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment"),
+        }
+        match &segments[3] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment"),
+        }
+        match &segments[4] {
+            OutputSegment::Text(t) => assert_eq!(t, "world"),
+            _ => panic!("Expected text segment"),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_text_replacement_multiple_times() {
+        let triggers = vec![
+            make_trigger("period", TriggerActionType::TextReplacement, "."),
+        ];
+
+        let segments = process_trigger_words("first sentence period second sentence period third sentence", &triggers);
+        assert_eq!(segments.len(), 1, "All text replacements should merge into one text segment, got: {:?}", segments);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "first sentence . second sentence . third sentence"),
+            _ => panic!("Expected merged text segment"),
+        }
+    }
+
+    #[test]
+    fn test_process_trigger_words_multiple_triggers() {
+        let triggers = vec![
+            make_trigger("enter", TriggerActionType::KeyPress, "enter"),
+            make_trigger("tab", TriggerActionType::KeyPress, "tab"),
+        ];
+
+        let segments = process_trigger_words("name tab email enter", &triggers);
+        assert_eq!(segments.len(), 4);
+
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "name"),
+            _ => panic!("Expected text segment"),
+        }
+        match &segments[1] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "tab"),
+            _ => panic!("Expected keypress segment"),
+        }
+        match &segments[2] {
+            OutputSegment::Text(t) => assert_eq!(t, "email"),
+            _ => panic!("Expected text segment"),
+        }
+        match &segments[3] {
+            OutputSegment::KeyPress(k) => assert_eq!(k, "enter"),
+            _ => panic!("Expected keypress segment"),
+        }
+    }
+
+    /// Simulates the full pipeline: extract triggers from raw transcription,
+    /// join text for LLM processing, simulate LLM output, reconstruct segments.
+    #[test]
+    fn test_pipeline_extract_then_reconstruct_with_llm() {
+        let triggers = vec![
+            make_trigger("enter", TriggerActionType::KeyPress, "enter"),
+        ];
+
+        // Step 1: Raw transcription with trigger words
+        let raw = "first paragraph enter second paragraph enter third paragraph";
+        let segments = process_trigger_words(raw, &triggers);
+        assert_eq!(segments.len(), 5);
+
+        // Step 2: Extract text parts for LLM processing
+        let text_parts: Vec<&str> = segments
+            .iter()
+            .filter_map(|s| match s {
+                OutputSegment::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        let clean_text = text_parts.join("\n");
+        assert_eq!(clean_text, "first paragraph\nsecond paragraph\nthird paragraph");
+
+        // Step 3: Simulate LLM post-processing (capitalizes, adds periods)
+        let llm_output = "First paragraph.\nSecond paragraph.\nThird paragraph.";
+
+        // Step 4: Reconstruct segments with LLM-processed text
+        let text_count = segments
+            .iter()
+            .filter(|s| matches!(s, OutputSegment::Text(_)))
+            .count();
+        let processed_parts: Vec<&str> = llm_output.split('\n').collect();
+        assert_eq!(processed_parts.len(), text_count);
+
+        let mut part_iter = processed_parts.into_iter();
+        let reconstructed: Vec<OutputSegment> = segments
+            .iter()
+            .map(|s| match s {
+                OutputSegment::Text(_) => {
+                    OutputSegment::Text(part_iter.next().unwrap().to_string())
+                }
+                OutputSegment::KeyPress(k) => OutputSegment::KeyPress(k.clone()),
+            })
+            .collect();
+
+        // Verify: LLM-processed text with keypresses at original positions
+        assert_eq!(reconstructed.len(), 5);
+        assert_eq!(reconstructed[0], OutputSegment::Text("First paragraph.".to_string()));
+        assert_eq!(reconstructed[1], OutputSegment::KeyPress("enter".to_string()));
+        assert_eq!(reconstructed[2], OutputSegment::Text("Second paragraph.".to_string()));
+        assert_eq!(reconstructed[3], OutputSegment::KeyPress("enter".to_string()));
+        assert_eq!(reconstructed[4], OutputSegment::Text("Third paragraph.".to_string()));
+    }
+
+    /// Tests that text replacements (like "period" -> ".") are applied before
+    /// the text would go to LLM, so the LLM sees proper punctuation.
+    #[test]
+    fn test_text_replacements_applied_before_llm() {
+        let triggers = vec![
+            make_trigger("period", TriggerActionType::TextReplacement, "."),
+            make_trigger("comma", TriggerActionType::TextReplacement, ","),
+        ];
+
+        let raw = "hello period how are you comma I am fine";
+        let segments = process_trigger_words(raw, &triggers);
+
+        // All text replacements merge into one text segment
+        assert_eq!(segments.len(), 1);
+        match &segments[0] {
+            OutputSegment::Text(t) => assert_eq!(t, "hello . how are you , I am fine"),
+            _ => panic!("Expected text segment"),
+        }
+    }
 }
