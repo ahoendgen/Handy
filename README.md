@@ -4,9 +4,11 @@
   <img src="docs/supercharged-logo.png" alt="Handy Supercharged" width="150">
 </p>
 
-> Personal fork of [Handy](https://github.com/cjpais/Handy) by [@ahoendgen](https://github.com/ahoendgen)
-
-This is not a standalone project. It's my personal, customized variant of Handy — a way to quickly implement features I need for my daily workflows without waiting for upstream releases. Changes that make sense for the broader community may be contributed back to the original project.
+> **SuperHandy — personal fork of [Handy](https://github.com/cjpais/Handy) by [@ahoendgen](https://github.com/ahoendgen)**
+>
+> Following my naming tradition, all my personal forks get the "Super" prefix and live on `supercharged` branches. This is not a standalone project — it's my customized variant of Handy with features I need for my daily workflows. Changes that make sense for the broader community may be contributed back to the original project.
+>
+> Check out my other [supercharged forks](https://github.com/ahoendgen/supercharged).
 
 ## Supercharged Features
 
