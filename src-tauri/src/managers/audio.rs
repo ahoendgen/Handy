@@ -87,12 +87,91 @@ fn set_mute(mute: bool) {
 
     #[cfg(target_os = "macos")]
     {
-        use std::process::Command;
-        let script = format!(
-            "set volume output muted {}",
-            if mute { "true" } else { "false" }
-        );
-        let _ = Command::new("osascript").args(["-e", &script]).output();
+        // Use CoreAudio API directly for near-instant mute (~1-2ms)
+        // instead of spawning an osascript process (~100-200ms).
+        use std::os::raw::c_void;
+
+        type OSStatus = i32;
+        type AudioObjectID = u32;
+
+        #[repr(C)]
+        struct AudioObjectPropertyAddress {
+            selector: u32,
+            scope: u32,
+            element: u32,
+        }
+
+        const AUDIO_OBJECT_SYSTEM_OBJECT: AudioObjectID = 1;
+        const AUDIO_HARDWARE_PROPERTY_DEFAULT_OUTPUT_DEVICE: u32 = u32::from_be_bytes(*b"dOut");
+        const AUDIO_DEVICE_PROPERTY_MUTE: u32 = u32::from_be_bytes(*b"mute");
+        const AUDIO_OBJECT_PROPERTY_SCOPE_GLOBAL: u32 = u32::from_be_bytes(*b"glob");
+        const AUDIO_OBJECT_PROPERTY_SCOPE_OUTPUT: u32 = u32::from_be_bytes(*b"outp");
+        const AUDIO_OBJECT_PROPERTY_ELEMENT_MAIN: u32 = 0;
+
+        extern "C" {
+            fn AudioObjectGetPropertyData(
+                object_id: AudioObjectID,
+                address: *const AudioObjectPropertyAddress,
+                qualifier_data_size: u32,
+                qualifier_data: *const c_void,
+                data_size: *mut u32,
+                data: *mut c_void,
+            ) -> OSStatus;
+
+            fn AudioObjectSetPropertyData(
+                object_id: AudioObjectID,
+                address: *const AudioObjectPropertyAddress,
+                qualifier_data_size: u32,
+                qualifier_data: *const c_void,
+                data_size: u32,
+                data: *const c_void,
+            ) -> OSStatus;
+        }
+
+        unsafe {
+            // 1. Get the default output device
+            let addr = AudioObjectPropertyAddress {
+                selector: AUDIO_HARDWARE_PROPERTY_DEFAULT_OUTPUT_DEVICE,
+                scope: AUDIO_OBJECT_PROPERTY_SCOPE_GLOBAL,
+                element: AUDIO_OBJECT_PROPERTY_ELEMENT_MAIN,
+            };
+
+            let mut device_id: AudioObjectID = 0;
+            let mut size = std::mem::size_of::<AudioObjectID>() as u32;
+
+            let status = AudioObjectGetPropertyData(
+                AUDIO_OBJECT_SYSTEM_OBJECT,
+                &addr,
+                0,
+                std::ptr::null(),
+                &mut size,
+                &mut device_id as *mut _ as *mut c_void,
+            );
+            if status != 0 {
+                log::error!("CoreAudio: failed to get default output device (status {})", status);
+                return;
+            }
+
+            // 2. Set the mute property on the default output device
+            let mute_addr = AudioObjectPropertyAddress {
+                selector: AUDIO_DEVICE_PROPERTY_MUTE,
+                scope: AUDIO_OBJECT_PROPERTY_SCOPE_OUTPUT,
+                element: AUDIO_OBJECT_PROPERTY_ELEMENT_MAIN,
+            };
+
+            let mute_value: u32 = if mute { 1 } else { 0 };
+            let status = AudioObjectSetPropertyData(
+                device_id,
+                &mute_addr,
+                0,
+                std::ptr::null(),
+                std::mem::size_of::<u32>() as u32,
+                &mute_value as *const _ as *const c_void,
+            );
+            if status != 0 {
+                log::error!("CoreAudio: failed to set mute (status {})", status);
+            }
+        }
     }
 }
 
