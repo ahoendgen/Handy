@@ -150,7 +150,15 @@
       },
       "audioFeedback": {
         "label": "تنبيهات صوتية",
-        "description": "تشغيل صوت عند بدء التسجيل وتوقفه"
+        "description": "تشغيل صوت عند بدء التسجيل وتوقفه",
+        "startSound": {
+          "label": "صوت البداية",
+          "description": "تشغيل صوت عند بدء التسجيل"
+        },
+        "stopSound": {
+          "label": "صوت الإيقاف",
+          "description": "تشغيل صوت عند توقف التسجيل"
+        }
       },
       "outputDevice": {
         "title": "جهاز الإخراج",

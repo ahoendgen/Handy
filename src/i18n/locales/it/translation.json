@@ -146,7 +146,15 @@
       },
       "audioFeedback": {
         "label": "Feedback Audio",
-        "description": "Riproduci un suono quando la registrazione inizia e finisce"
+        "description": "Riproduci un suono quando la registrazione inizia e finisce",
+        "startSound": {
+          "label": "Suono di Avvio",
+          "description": "Riproduci un suono quando la registrazione inizia"
+        },
+        "stopSound": {
+          "label": "Suono di Fine",
+          "description": "Riproduci un suono quando la registrazione finisce"
+        }
       },
       "outputDevice": {
         "title": "Dispositivo di Output",

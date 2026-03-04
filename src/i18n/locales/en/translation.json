@@ -150,7 +150,15 @@
       },
       "audioFeedback": {
         "label": "Audio Feedback",
-        "description": "Play sound when recording starts and stops"
+        "description": "Play sound when recording starts and stops",
+        "startSound": {
+          "label": "Start Sound",
+          "description": "Play sound when recording starts"
+        },
+        "stopSound": {
+          "label": "Stop Sound",
+          "description": "Play sound when recording stops"
+        }
       },
       "outputDevice": {
         "title": "Output Device",

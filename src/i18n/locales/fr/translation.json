@@ -147,7 +147,15 @@
       },
       "audioFeedback": {
         "label": "Signal sonore",
-        "description": "Jouer un son au début et à la fin de l'enregistrement"
+        "description": "Jouer un son au début et à la fin de l'enregistrement",
+        "startSound": {
+          "label": "Son de Démarrage",
+          "description": "Jouer un son au début de l'enregistrement"
+        },
+        "stopSound": {
+          "label": "Son d'Arrêt",
+          "description": "Jouer un son à la fin de l'enregistrement"
+        }
       },
       "outputDevice": {
         "title": "Périphérique de sortie",

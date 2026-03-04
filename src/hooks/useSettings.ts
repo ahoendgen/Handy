@@ -59,7 +59,8 @@ export const useSettings = (): UseSettingsReturn => {
     isUpdating: store.isUpdatingKey,
     audioDevices: store.audioDevices,
     outputDevices: store.outputDevices,
-    audioFeedbackEnabled: store.settings?.audio_feedback || false,
+    audioFeedbackEnabled:
+      (store.settings?.audio_feedback_start || store.settings?.audio_feedback_stop) ?? false,
     postProcessModelOptions: store.postProcessModelOptions,
     updateSetting: store.updateSetting,
     resetSetting: store.resetSetting,

@@ -130,7 +130,15 @@
       },
       "audioFeedback": {
         "label": "Zvuková odezva",
-        "description": "Přehrát zvuk při zahájení a ukončení nahrávání"
+        "description": "Přehrát zvuk při zahájení a ukončení nahrávání",
+        "startSound": {
+          "label": "Zvuk zahájení",
+          "description": "Přehrát zvuk při zahájení nahrávání"
+        },
+        "stopSound": {
+          "label": "Zvuk ukončení",
+          "description": "Přehrát zvuk při ukončení nahrávání"
+        }
       },
       "outputDevice": {
         "title": "Výstupní zařízení",

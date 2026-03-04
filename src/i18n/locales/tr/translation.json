@@ -150,7 +150,15 @@
       },
       "audioFeedback": {
         "label": "Sesli Geri Bildirim",
-        "description": "Kayıt başladığında ve bittiğinde ses çalar"
+        "description": "Kayıt başladığında ve bittiğinde ses çalar",
+        "startSound": {
+          "label": "Başlangıç Sesi",
+          "description": "Kayıt başladığında ses çalar"
+        },
+        "stopSound": {
+          "label": "Bitiş Sesi",
+          "description": "Kayıt bittiğinde ses çalar"
+        }
       },
       "outputDevice": {
         "title": "Çıkış Cihazı",

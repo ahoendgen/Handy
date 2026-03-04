@@ -146,7 +146,15 @@
       },
       "audioFeedback": {
         "label": "Audio-Feedback",
-        "description": "Ton bei Start und Ende der Aufnahme abspielen"
+        "description": "Ton bei Start und Ende der Aufnahme abspielen",
+        "startSound": {
+          "label": "Start-Ton",
+          "description": "Ton bei Start der Aufnahme abspielen"
+        },
+        "stopSound": {
+          "label": "Stopp-Ton",
+          "description": "Ton bei Ende der Aufnahme abspielen"
+        }
       },
       "outputDevice": {
         "title": "Ausgabegerät",

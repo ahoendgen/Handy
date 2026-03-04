@@ -146,7 +146,15 @@
       },
       "audioFeedback": {
         "label": "Retroalimentación de Audio",
-        "description": "Reproducir sonido cuando la grabación inicia y se detiene"
+        "description": "Reproducir sonido cuando la grabación inicia y se detiene",
+        "startSound": {
+          "label": "Sonido de Inicio",
+          "description": "Reproducir sonido cuando la grabación inicia"
+        },
+        "stopSound": {
+          "label": "Sonido de Parada",
+          "description": "Reproducir sonido cuando la grabación se detiene"
+        }
       },
       "outputDevice": {
         "title": "Dispositivo de Salida",

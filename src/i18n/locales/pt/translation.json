@@ -150,7 +150,15 @@
       },
       "audioFeedback": {
         "label": "Feedback de Áudio",
-        "description": "Reproduzir som quando a gravação iniciar e parar"
+        "description": "Reproduzir som quando a gravação iniciar e parar",
+        "startSound": {
+          "label": "Som de Início",
+          "description": "Reproduzir som quando a gravação iniciar"
+        },
+        "stopSound": {
+          "label": "Som de Parada",
+          "description": "Reproduzir som quando a gravação parar"
+        }
       },
       "outputDevice": {
         "title": "Dispositivo de Saída",

@@ -147,7 +147,15 @@
       },
       "audioFeedback": {
         "label": "Phản hồi âm thanh",
-        "description": "Phát âm thanh khi bắt đầu và kết thúc ghi âm"
+        "description": "Phát âm thanh khi bắt đầu và kết thúc ghi âm",
+        "startSound": {
+          "label": "Âm thanh bắt đầu",
+          "description": "Phát âm thanh khi bắt đầu ghi âm"
+        },
+        "stopSound": {
+          "label": "Âm thanh kết thúc",
+          "description": "Phát âm thanh khi kết thúc ghi âm"
+        }
       },
       "outputDevice": {
         "title": "Thiết bị đầu ra",

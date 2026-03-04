@@ -242,6 +242,8 @@ pub fn run() {
         shortcut::reset_binding,
         shortcut::change_ptt_setting,
         shortcut::change_audio_feedback_setting,
+        shortcut::change_audio_feedback_start_setting,
+        shortcut::change_audio_feedback_stop_setting,
         shortcut::change_audio_feedback_volume_setting,
         shortcut::change_sound_theme_setting,
         shortcut::change_start_hidden_setting,

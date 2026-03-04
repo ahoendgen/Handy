@@ -146,7 +146,15 @@
       },
       "audioFeedback": {
         "label": "音频反馈",
-        "description": "录制开始和停止时播放声音"
+        "description": "录制开始和停止时播放声音",
+        "startSound": {
+          "label": "开始提示音",
+          "description": "录制开始时播放声音"
+        },
+        "stopSound": {
+          "label": "结束提示音",
+          "description": "录制停止时播放声音"
+        }
       },
       "outputDevice": {
         "title": "输出设备",

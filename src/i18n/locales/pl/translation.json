@@ -146,7 +146,15 @@
       },
       "audioFeedback": {
         "label": "Informacja dźwiękowa",
-        "description": "Odtwarzaj dźwięk przy rozpoczęciu i zakończeniu nagrywania"
+        "description": "Odtwarzaj dźwięk przy rozpoczęciu i zakończeniu nagrywania",
+        "startSound": {
+          "label": "Dźwięk startu",
+          "description": "Odtwarzaj dźwięk przy rozpoczęciu nagrywania"
+        },
+        "stopSound": {
+          "label": "Dźwięk stopu",
+          "description": "Odtwarzaj dźwięk przy zakończeniu nagrywania"
+        }
       },
       "outputDevice": {
         "title": "Urządzenie wyjściowe",

@@ -14,6 +14,13 @@ pub enum SoundType {
     Stop,
 }
 
+fn is_sound_enabled(settings: &AppSettings, sound_type: &SoundType) -> bool {
+    match sound_type {
+        SoundType::Start => settings.audio_feedback_start,
+        SoundType::Stop => settings.audio_feedback_stop,
+    }
+}
+
 fn resolve_sound_path(
     app: &AppHandle,
     settings: &AppSettings,
@@ -42,7 +49,7 @@ fn get_sound_base_dir(settings: &AppSettings) -> tauri::path::BaseDirectory {
 
 pub fn play_feedback_sound(app: &AppHandle, sound_type: SoundType) {
     let settings = settings::get_settings(app);
-    if !settings.audio_feedback {
+    if !is_sound_enabled(&settings, &sound_type) {
         return;
     }
     if let Some(path) = resolve_sound_path(app, &settings, sound_type) {
@@ -52,7 +59,7 @@ pub fn play_feedback_sound(app: &AppHandle, sound_type: SoundType) {
 
 pub fn play_feedback_sound_blocking(app: &AppHandle, sound_type: SoundType) {
     let settings = settings::get_settings(app);
-    if !settings.audio_feedback {
+    if !is_sound_enabled(&settings, &sound_type) {
         return;
     }
     if let Some(path) = resolve_sound_path(app, &settings, sound_type) {

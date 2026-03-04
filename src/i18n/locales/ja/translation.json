@@ -146,7 +146,15 @@
       },
       "audioFeedback": {
         "label": "音声フィードバック",
-        "description": "録音の開始と停止時にサウンドを再生"
+        "description": "録音の開始と停止時にサウンドを再生",
+        "startSound": {
+          "label": "開始音",
+          "description": "録音開始時にサウンドを再生"
+        },
+        "stopSound": {
+          "label": "終了音",
+          "description": "録音停止時にサウンドを再生"
+        }
       },
       "outputDevice": {
         "title": "出力デバイス",
