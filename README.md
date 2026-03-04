@@ -16,6 +16,8 @@ Features added in this fork on top of upstream Handy:
 
 - **Trigger Words** — Define words or phrases that execute actions during transcription (e.g. say "enter" to press Enter, or "comma" to insert a comma). Includes built-in triggers and support for custom ones. Configurable per-language in Settings.
 - **Custom Branding** — Renamed to "Handy Supercharged" with electric blue color theme and lightning bolt tray icon. This is purely so I can easily tell both versions apart when running them side by side, especially when testing new upstream features.
+- **Instant Mute**: Mutes the microphone instantly via CoreAudio when recording stops, preventing end sounds from being captured
+- **Separate Sound Toggles**: Independent toggles for start and stop recording sounds
 - **No Update Checker** — The upstream update check has been removed since this fork follows its own release cycle.
 
 ---
